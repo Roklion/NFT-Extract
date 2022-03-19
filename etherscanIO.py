@@ -2,9 +2,9 @@ from etherscan import Etherscan
 import csv
 import os
 
-def initialize():
+def initialize(api_key):
     global eth
-    eth = Etherscan("4YAQ6IJ938VB3VWEDZB6U3JHTDSNFZM1VG")
+    eth = Etherscan(api_key)
 
 def getTxns(wallet):
     try:
@@ -35,9 +35,9 @@ def getErc721Txns(wallet):
         return([])
 
 def getErc1155Txns(wallet, dataPath):
-    return(__getErc1155TxnsFromSpreadsheet(wallet, dataPath))
+    return(_getErc1155TxnsFromSpreadsheet(wallet, dataPath))
 
-def __getErc1155TxnsFromSpreadsheet(wallet, dataPath):
+def _getErc1155TxnsFromSpreadsheet(wallet, dataPath):
     # assumption: a single data file (csv) will be placed under %datapath%/ERC1155,
     #       and the file name should contains wallet address
     path = dataPath + "/ERC1155/"

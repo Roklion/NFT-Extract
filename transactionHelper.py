@@ -1,5 +1,8 @@
+import coinbase as cb
 from web3 import Web3
-from decimal import *
+import priceIO
+import os
+import csv
 
 
 def groupByNormalTxns(txn: dict,
@@ -53,8 +56,6 @@ def _processErc721Txns(txns_erc721: list) -> dict:
             'to': txn['to']
         })
 
-    if erc721_summary:
-        print("Processed ERC-721 transaction")
     return erc721_summary
 
 
@@ -74,8 +75,6 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
             'to': txn['To']
         })
 
-    if erc1155_summary:
-        print("Processed ERC-721 transaction")
     return erc1155_summary
 
 
@@ -84,14 +83,21 @@ def enrichTxn(txn_grouped: dict) -> dict:
     txn_normal = txn_grouped['txn_normal']
 
     # Process gas and ETH
+    gas_amount = float(Web3.fromWei(int(txn_normal['gasPrice']) * int(txn_normal['gasUsed']), 'ether'))
+    eth_amount = float(Web3.fromWei(int(txn_normal['value']), 'ether'))
     txn_summary = {
-        'gas': Web3.fromWei(int(txn_normal['gasPrice']) * int(txn_normal['gasUsed']), 'ether'),
+        'gas': {
+            'amount': gas_amount,
+            'value_usd': gas_amount * priceIO.getTokenHistData("ethereum", "USD", txn_normal['timeStamp'])
+        },
         'ETH': {
-            'value': Web3.fromWei(int(txn_normal['value']), 'ether'),
+            'amount': eth_amount,
+            'value_usd': eth_amount * priceIO.getTokenHistData("ethereum", "USD", txn_normal['timeStamp']),
             'from': txn_normal['from'],
-            'to': txn_normal['to'],
+            'to': txn_normal['to']
         }
     }
+    txn_grouped_enriched.update(txn_summary)
 
     # Process ERC-20 tokens in transaction
     erc20_summary = _processErc20Txns(txn_grouped['txn_erc20'])
@@ -108,3 +114,16 @@ def enrichTxn(txn_grouped: dict) -> dict:
     txn_grouped_enriched.update(erc1155_summary)
 
     return txn_grouped_enriched
+
+
+def getCoinbaseTxns(dataPath):
+    # assumption: a single data file (csv) will be placed under %datapath%/ERC1155,
+    #       and the file name should contains wallet address
+    path = dataPath + "/Coinbase/"
+    for file in os.listdir(path):
+        if file.endswith(".csv"):
+            with open(path + file, "r") as f:
+                return(list(csv.DictReader(f)))
+
+    print("Cannot find any Coinbase data file")
+    return([])
