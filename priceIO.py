@@ -40,7 +40,7 @@ def _getTokenHistData(from_token, to, date_str):
 
 
 def getTokenHistData(from_token, to, timestamp):
-    datetime_obj = datetime.fromtimestamp(int(timestamp))
+    datetime_obj = datetime.fromtimestamp(timestamp)
     date_str = "%02d-%02d-%4d" % (datetime_obj.day, datetime_obj.month, datetime_obj.year)
 
     return _getTokenHistData(from_token, to, date_str)

@@ -1,8 +1,6 @@
-import coinbase as cb
 from web3 import Web3
+from datetime import *
 import priceIO
-import os
-import csv
 
 
 def groupByNormalTxns(txn: dict,
@@ -85,17 +83,20 @@ def enrichTxn(txn_grouped: dict) -> dict:
     # Process gas and ETH
     gas_amount = float(Web3.fromWei(int(txn_normal['gasPrice']) * int(txn_normal['gasUsed']), 'ether'))
     eth_amount = float(Web3.fromWei(int(txn_normal['value']), 'ether'))
+    timestamp = int(txn_normal['timeStamp'])
     txn_summary = {
         'gas': {
             'amount': gas_amount,
-            'value_usd': gas_amount * priceIO.getTokenHistData("ethereum", "USD", txn_normal['timeStamp'])
+            'value_usd': gas_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp)
         },
         'ETH': {
             'amount': eth_amount,
-            'value_usd': eth_amount * priceIO.getTokenHistData("ethereum", "USD", txn_normal['timeStamp']),
+            'value_usd': eth_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp),
             'from': txn_normal['from'],
             'to': txn_normal['to']
-        }
+        },
+        'timestamp': timestamp,
+        'time': datetime.utcfromtimestamp(timestamp)
     }
     txn_grouped_enriched.update(txn_summary)
 
@@ -116,14 +117,3 @@ def enrichTxn(txn_grouped: dict) -> dict:
     return txn_grouped_enriched
 
 
-def getCoinbaseTxns(dataPath):
-    # assumption: a single data file (csv) will be placed under %datapath%/ERC1155,
-    #       and the file name should contains wallet address
-    path = dataPath + "/Coinbase/"
-    for file in os.listdir(path):
-        if file.endswith(".csv"):
-            with open(path + file, "r") as f:
-                return(list(csv.DictReader(f)))
-
-    print("Cannot find any Coinbase data file")
-    return([])
