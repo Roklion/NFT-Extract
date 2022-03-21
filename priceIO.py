@@ -1,11 +1,7 @@
+from constants import *
 from pycoingecko import CoinGeckoAPI
 from datetime import *
 from ratelimit import limits, sleep_and_retry
-
-ONE_MINUTE = 60
-ONE_SECOND = 1
-MAX_CALLS_PER_MINUTE_CG = 40    # API limit is 50 calls/min
-MAX_CALLS_PER_SECOND_CG = 7     # API limit is 8 calls/min
 
 cg = CoinGeckoAPI()
 token_data_cache = {}
@@ -13,6 +9,7 @@ token_data_cache = {}
 
 @sleep_and_retry
 @limits(calls=MAX_CALLS_PER_MINUTE_CG, period=ONE_MINUTE)
+@limits(calls=MAX_CALLS_PER_SECOND_CG, period=ONE_SECOND)
 def _getCoinHistoryByIdCoinGecko(from_token, date_str):
     global cg
     return cg.get_coin_history_by_id(from_token.lower(), date_str)

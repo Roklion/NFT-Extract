@@ -1,6 +1,7 @@
+from constants import *
+import priceIO
 from web3 import Web3
 from datetime import *
-import priceIO
 
 
 def groupByNormalTxns(txn: dict,
@@ -117,3 +118,146 @@ def enrichTxn(txn_grouped: dict) -> dict:
     return txn_grouped_enriched
 
 
+def _compareTimestamp(txn_a, txn_b):
+    return txn_a['timestamp'] < txn_b['timestamp']
+
+
+def _describeEtherscanTxn(txn, my_wallets):
+    eth_data = txn['ETH']
+    gas_data = txn['gas']
+    addr_from = eth_data['from'].lower()
+    addr_to = eth_data['to'].lower()
+    if addr_from in my_wallets and addr_to in my_wallets:
+        txn_type = 'transfer'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to 0x...{} ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_from[-5:], addr_to[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+    elif addr_from in COINBASE_WALLETS:
+        txn_type = 'transfer'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from Coinbase to 0x...{} ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_to[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+    elif addr_to in COINBASE_WALLETS:
+        txn_type = 'transfer'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Coinbase ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_from[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+    elif addr_from in my_wallets:
+        txn_type = 'buy_nft'
+        describe_str = 'Buy NFT for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_from[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+    elif addr_to in my_wallets:
+        txn_type = 'sell_nft'
+        describe_str = 'Sell NFT for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_to[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+
+    else:
+        txn_type = 'unknown'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to 0x...{} ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_from[-5:], addr_to[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+
+        raise Exception('Unknown transaction type {}\n{}'.format(txn_type, describe_str))
+
+    return {
+        'type': txn_type,
+        'ETH': eth_data,
+        'gas': gas_data,
+        'description': describe_str,
+        'timestamp': txn['timestamp'],
+        'id': txn['txn_hash']
+    }
+
+
+def _describeCoinbaseTxn(txn, asset, my_wallets):
+    if txn['Asset'].lower() == asset.lower():
+        is_transfer = is_gift = False
+        addr_target = ""
+
+        txn_type = txn['Transaction Type'].lower()
+        if txn_type != 'send' and txn_type != 'buy':
+            raise Exception('Unknown transaction type from coinbase {}'.format(txn_type))
+
+        if txn_type == 'send':
+            is_transfer = True
+            addr_target = txn['Notes'].split()[-1].lower()
+
+            if addr_target not in my_wallets:
+                is_gift = True
+                txn_type = 'gift'
+            else:
+                txn_type = 'transfer'
+
+        eth_data = {
+            'amount': float(txn['Quantity Transacted']),
+            'value_usd': float(txn['Quantity Transacted']) * float(txn['Spot Price at Transaction'])
+        }
+        gas_data = {
+            'value_usd': float(txn['Fees']) if not is_transfer else 0
+        }
+
+        if is_gift:
+            describe_str = 'Gift {:.5f}E (worth ${:.2f}) ' \
+                           'from Coinbase to 0x...{}'.format(eth_data['amount'], eth_data['value_usd'],
+                                                             addr_target[-5:])
+        elif is_transfer:
+            describe_str = 'Transfer {:.5f}E (worth ${:.2f}) ' \
+                           'from Coinbase to 0x...{}'.format(eth_data['amount'], eth_data['value_usd'],
+                                                             addr_target[-5:])
+        else:
+            describe_str = 'Buy {:.5f}E for ${:.2f} with ${:.2f} fee'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                             gas_data['value_usd'])
+
+
+        return {
+            'type': txn_type,
+            'ETH': eth_data,
+            'gas': gas_data,
+            'description': describe_str,
+            'timestamp': txn['timestamp'],
+            'id': ''
+        }
+    else:
+        return {}
+
+
+def describeEthTxns(coinbase_txns, etherscan_txns, my_wallets):
+    def sortByTimestamp(x):
+        return x['timestamp']
+
+    coinbase_txns.sort(key=sortByTimestamp)
+    etherscan_txns.sort(key=sortByTimestamp)
+    eth_descriptions = []
+
+    i = j = 0
+    max_i = len(coinbase_txns) - 1
+    max_j = len(etherscan_txns) - 1
+    while i <= max_i or j <= max_j:
+        # if exhausted etherscan txns
+        if j > max_j:
+            eth_descriptions.append(_describeCoinbaseTxn(coinbase_txns[i], "ETH", my_wallets))
+            i += 1
+        # if exhausted coinbase txns
+        elif i > max_i:
+            eth_descriptions.append(_describeEtherscanTxn(etherscan_txns[j], my_wallets))
+            j += 1
+        # if coinbase txn timestamp earlier (smaller)
+        elif _compareTimestamp(coinbase_txns[i], etherscan_txns[j]):
+            eth_descriptions.append(_describeCoinbaseTxn(coinbase_txns[i], "ETH", my_wallets))
+            i += 1
+        # else - etherscan txn timestamp earlier (smaller)
+        else:
+            eth_descriptions.append(_describeEtherscanTxn(etherscan_txns[j], my_wallets))
+            j += 1
+
+    # remove empty transactions, not relevant to ETH
+    eth_descriptions = [x for x in eth_descriptions if x]
+    return eth_descriptions
