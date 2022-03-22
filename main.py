@@ -1,6 +1,7 @@
 import ethTransactionsRetriever as ethTxnsRetriever
 import coinbaseRetriever
 import transactionHelper as txnHelper
+import analyzer
 import json
 import os
 from datetime import *
@@ -49,9 +50,12 @@ for wallet_addr in my_wallets:
 
     print(str(txn_count), " transactions processed")
 
-print("\nSummarize ETH transactions")
+
 try:
+    print("\nSummarize ETH transactions")
     eth_txns_summary = txnHelper.describeEthTxns(coinbase_txns, txn_groups, my_wallets)
+    print("\nAnalyze ETH")
+    eth_balances = analyzer.analyzeEth(eth_txns_summary)
 except Exception as e:
     print("Caught an exception ", e)
 

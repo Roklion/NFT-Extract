@@ -133,14 +133,14 @@ def _describeEtherscanTxn(txn, my_wallets):
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:], addr_to[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
-    elif addr_from in COINBASE_WALLETS:
-        txn_type = 'transfer'
+    elif addr_from in COINBASE_WALLETS and addr_to in my_wallets:
+        txn_type = 'transfer_from_coinbase'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from Coinbase to 0x...{} ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_to[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
     elif addr_to in COINBASE_WALLETS:
-        txn_type = 'transfer'
+        txn_type = 'transfer_to_coinbase'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Coinbase ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:],
@@ -182,11 +182,11 @@ def _describeCoinbaseTxn(txn, asset, my_wallets):
         is_transfer = is_gift = False
         addr_target = ""
 
-        txn_type = txn['Transaction Type'].lower()
-        if txn_type != 'send' and txn_type != 'buy':
-            raise Exception('Unknown transaction type from coinbase {}'.format(txn_type))
+        txn_type_raw = txn['Transaction Type'].lower()
+        if txn_type_raw != 'send' and txn_type_raw != 'buy':
+            raise Exception('Unknown transaction type from coinbase {}'.format(txn_type_raw))
 
-        if txn_type == 'send':
+        if txn_type_raw == 'send':
             is_transfer = True
             addr_target = txn['Notes'].split()[-1].lower()
 
@@ -194,11 +194,15 @@ def _describeCoinbaseTxn(txn, asset, my_wallets):
                 is_gift = True
                 txn_type = 'gift'
             else:
-                txn_type = 'transfer'
+                txn_type = 'transfer_by_coinbase'
+        else:
+            txn_type = txn_type_raw
+            addr_target = ''
 
         eth_data = {
             'amount': float(txn['Quantity Transacted']),
-            'value_usd': float(txn['Quantity Transacted']) * float(txn['Spot Price at Transaction'])
+            'value_usd': float(txn['Quantity Transacted']) * float(txn['Spot Price at Transaction']),
+            'to': addr_target
         }
         gas_data = {
             'value_usd': float(txn['Fees']) if not is_transfer else 0
@@ -215,7 +219,6 @@ def _describeCoinbaseTxn(txn, asset, my_wallets):
         else:
             describe_str = 'Buy {:.5f}E for ${:.2f} with ${:.2f} fee'.format(eth_data['amount'], eth_data['value_usd'],
                                                                              gas_data['value_usd'])
-
 
         return {
             'type': txn_type,
