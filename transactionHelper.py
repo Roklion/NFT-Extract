@@ -9,6 +9,7 @@ def groupByNormalTxns(txn: dict,
                       txns_erc20: list,
                       txns_erc721: list,
                       txns_erc1155: list) -> dict:
+    # Different type of transactions can be joined by the same transaction hash
     txn_hash = txn['hash']
     return ({
         'txn_hash': txn_hash,
@@ -26,6 +27,8 @@ def _processErc20Txns(txns_erc20: list) -> dict:
         if txn['tokenSymbol'] not in erc20_summary:
             erc20_summary[txn['tokenSymbol']] = []
 
+        # tokenDecimal is token precision
+        # value represents integer to the most precise digit of the token
         erc20_summary[txn['tokenSymbol']].append({
             'value': float(txn['value']) / pow(10, int(txn['tokenDecimal'])),
             'contract': txn['contractAddress'],
@@ -45,6 +48,7 @@ def _processErc721Txns(txns_erc721: list) -> dict:
         if token_id not in erc721_summary:
             erc721_summary[token_id] = []
 
+        # ERC-721 token is unique
         erc721_summary[token_id].append({
             'value': 1.0,
             'contract': txn['contractAddress'],
@@ -64,6 +68,7 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
         if txn['TokenSymbol'] not in erc1155_summary:
             erc1155_summary[txn['TokenSymbol']] = []
 
+        # TokenName represents count of 1155 token
         erc1155_summary[txn['TokenSymbol']].append({
             'value': float(txn['TokenName']),
             'contract': txn['ContractAddress'],
@@ -80,11 +85,14 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
 def enrichTxn(txn_grouped: dict) -> dict:
     txn_grouped_enriched = txn_grouped
     txn_normal = txn_grouped['txn_normal']
+    timestamp = int(txn_normal['timeStamp'])
 
     # Process gas and ETH
     gas_amount = float(Web3.fromWei(int(txn_normal['gasPrice']) * int(txn_normal['gasUsed']), 'ether'))
     eth_amount = float(Web3.fromWei(int(txn_normal['value']), 'ether'))
-    timestamp = int(txn_normal['timeStamp'])
+
+    # Add gas and ETH details of the given transaction
+    # amount is in ether
     txn_summary = {
         'gas': {
             'amount': gas_amount,
@@ -111,6 +119,7 @@ def enrichTxn(txn_grouped: dict) -> dict:
     assert not dict(txn_grouped_enriched.items() & erc721_summary.items())  # make sure no overlap
     txn_grouped_enriched.update(erc721_summary)
 
+    # Process ERC-1155 tokens in transaction
     erc1155_summary = _processErc1155Txns(txn_grouped['txn_erc1155'])
     assert not dict(txn_grouped_enriched.items() & erc1155_summary.items())  # make sure no overlap
     txn_grouped_enriched.update(erc1155_summary)
@@ -118,7 +127,7 @@ def enrichTxn(txn_grouped: dict) -> dict:
     return txn_grouped_enriched
 
 
-def _compareTimestamp(txn_a, txn_b):
+def _timestampLessThan(txn_a, txn_b):
     return txn_a['timestamp'] < txn_b['timestamp']
 
 
@@ -180,31 +189,35 @@ def _describeEtherscanTxn(txn, my_wallets):
 def _describeCoinbaseTxn(txn, asset, my_wallets):
     if txn['Asset'].lower() == asset.lower():
         is_transfer = is_gift = False
-        addr_target = ""
 
         txn_type_raw = txn['Transaction Type'].lower()
         if txn_type_raw != 'send' and txn_type_raw != 'buy':
             raise Exception('Unknown transaction type from coinbase {}'.format(txn_type_raw))
 
+        # Send represents either internal transfer, or a gift transaction
         if txn_type_raw == 'send':
             is_transfer = True
+            # TODO: this should have been created in an enrichment step, not description
             addr_target = txn['Notes'].split()[-1].lower()
 
             if addr_target not in my_wallets:
                 is_gift = True
                 txn_type = 'gift'
             else:
+                # i.e. a transfer initiated from Coinbase
                 txn_type = 'transfer_by_coinbase'
         else:
             txn_type = txn_type_raw
             addr_target = ''
 
+        # TODO: this should have been created in an enrichment step, not description
         eth_data = {
             'amount': float(txn['Quantity Transacted']),
             'value_usd': float(txn['Quantity Transacted']) * float(txn['Spot Price at Transaction']),
             'to': addr_target
         }
         gas_data = {
+            # transfer fee is baked in
             'value_usd': float(txn['Fees']) if not is_transfer else 0
         }
 
@@ -236,6 +249,7 @@ def describeEthTxns(coinbase_txns, etherscan_txns, my_wallets):
     def sortByTimestamp(x):
         return x['timestamp']
 
+    # the oldest to the latest transactions by timestamp
     coinbase_txns.sort(key=sortByTimestamp)
     etherscan_txns.sort(key=sortByTimestamp)
     eth_descriptions = []
@@ -243,6 +257,7 @@ def describeEthTxns(coinbase_txns, etherscan_txns, my_wallets):
     i = j = 0
     max_i = len(coinbase_txns) - 1
     max_j = len(etherscan_txns) - 1
+    # Iterate over two list of transactions, by ascending timestamp in both lists
     while i <= max_i or j <= max_j:
         # if exhausted etherscan txns
         if j > max_j:
@@ -253,7 +268,7 @@ def describeEthTxns(coinbase_txns, etherscan_txns, my_wallets):
             eth_descriptions.append(_describeEtherscanTxn(etherscan_txns[j], my_wallets))
             j += 1
         # if coinbase txn timestamp earlier (smaller)
-        elif _compareTimestamp(coinbase_txns[i], etherscan_txns[j]):
+        elif _timestampLessThan(coinbase_txns[i], etherscan_txns[j]):
             eth_descriptions.append(_describeCoinbaseTxn(coinbase_txns[i], "ETH", my_wallets))
             i += 1
         # else - etherscan txn timestamp earlier (smaller)

@@ -18,6 +18,7 @@ def getErc1155TxnsFromSpreadsheet(wallet, data_path):
 
 def getCoinbaseTxnsFromSpreadsheet(data_path):
     # assumption: a single data file (csv) will be placed under %data_path%/Coinbase,
+    #   Spreadsheet is downloaded from transaction report
     path = data_path + "Coinbase/"
     for file_name in os.listdir(path):
         if file_name.endswith(".csv"):

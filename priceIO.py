@@ -7,6 +7,7 @@ cg = CoinGeckoAPI()
 token_data_cache = {}
 
 
+# Conservative rate limit to avoid API errors
 @sleep_and_retry
 @limits(calls=MAX_CALLS_PER_MINUTE_CG, period=ONE_MINUTE)
 @limits(calls=MAX_CALLS_PER_SECOND_CG, period=ONE_SECOND)
@@ -21,11 +22,13 @@ def _getTokenHistData(from_token, to, date_str):
     from_token = from_token.lower()
     to = to.lower()
 
+    # Used cached price to reduce number of API calls
     if from_token in token_data_cache:
         if to in token_data_cache[from_token]:
             if date_str in token_data_cache[from_token][to]:
                 return token_data_cache[from_token][to][date_str]
 
+    # No cache, call API
     price_data = _getCoinHistoryByIdCoinGecko(from_token, date_str)
     price = price_data['market_data']['current_price'][to]
 
