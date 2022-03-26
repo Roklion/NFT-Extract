@@ -22,14 +22,11 @@ def groupByNormalTxns(txn: dict,
 
 
 def _processErc20Txns(txns_erc20: list) -> dict:
-    erc20_summary = {}
+    erc20_summary = []
     for txn in txns_erc20:
-        if txn['tokenSymbol'] not in erc20_summary:
-            erc20_summary[txn['tokenSymbol']] = []
-
         # tokenDecimal is token precision
         # value represents integer to the most precise digit of the token
-        erc20_summary[txn['tokenSymbol']].append({
+        erc20_summary.append({
             'value': float(txn['value']) / pow(10, int(txn['tokenDecimal'])),
             'contract': txn['contractAddress'],
             'name': txn['tokenName'],
@@ -38,18 +35,14 @@ def _processErc20Txns(txns_erc20: list) -> dict:
             'to': txn['to']
         })
 
-    return erc20_summary
+    return {'ERC-20': erc20_summary}
 
 
 def _processErc721Txns(txns_erc721: list) -> dict:
-    erc721_summary = {}
+    erc721_summary = []
     for txn in txns_erc721:
-        token_id = txn['tokenSymbol'] + txn['tokenID']
-        if token_id not in erc721_summary:
-            erc721_summary[token_id] = []
-
         # ERC-721 token is unique
-        erc721_summary[token_id].append({
+        erc721_summary.append({
             'value': 1.0,
             'contract': txn['contractAddress'],
             'name': txn['tokenName'],
@@ -59,17 +52,14 @@ def _processErc721Txns(txns_erc721: list) -> dict:
             'to': txn['to']
         })
 
-    return erc721_summary
+    return {'ERC-721': erc721_summary}
 
 
 def _processErc1155Txns(txns_erc1155: list) -> dict:
-    erc1155_summary = {}
+    erc1155_summary = []
     for txn in txns_erc1155:
-        if txn['TokenSymbol'] not in erc1155_summary:
-            erc1155_summary[txn['TokenSymbol']] = []
-
         # TokenName represents count of 1155 token
-        erc1155_summary[txn['TokenSymbol']].append({
+        erc1155_summary.append({
             'value': float(txn['TokenName']),
             'contract': txn['ContractAddress'],
             'name': txn['TokenSymbol'],
@@ -79,7 +69,7 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
             'to': txn['To']
         })
 
-    return erc1155_summary
+    return {'ERC-1155': erc1155_summary}
 
 
 def enrichTxn(txn_grouped: dict) -> dict:
@@ -105,7 +95,6 @@ def enrichTxn(txn_grouped: dict) -> dict:
             'to': txn_normal['to']
         },
         'timestamp': timestamp,
-        'time': datetime.utcfromtimestamp(timestamp)
     }
     txn_grouped_enriched.update(txn_summary)
 
@@ -151,6 +140,12 @@ def _describeEtherscanTxn(txn, my_wallets):
     elif addr_to in COINBASE_WALLETS:
         txn_type = 'transfer_to_coinbase'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Coinbase ' \
+                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                 addr_from[-5:],
+                                                                 gas_data['amount'], gas_data['value_usd'])
+    elif addr_to in RONIN_BRIDGE:
+        txn_type = 'transfer_to_ronin'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Ronin ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])

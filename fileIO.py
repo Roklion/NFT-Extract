@@ -1,5 +1,6 @@
 import csv
 import os
+import json
 
 
 def getErc1155TxnsFromSpreadsheet(wallet, data_path):
@@ -38,3 +39,14 @@ def getCoinbaseTxnsFromSpreadsheet(data_path):
 
     print("Cannot find any Coinbase data file")
     return []
+
+
+def cacheTransactions(transaction_data, data_cache_f):
+    with open(data_cache_f, 'w') as f:
+        json.dump({'data': transaction_data}, f)
+
+
+def readTransactionsCache(data_cache_f):
+    with open(data_cache_f) as f:
+        json_data = json.load(f)
+        return json_data['data']
