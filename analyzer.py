@@ -145,6 +145,20 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
 
                     tax_events.append(tax_event)
 
+            case 'transfer':
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], -txn['gas']['amount'],
+                                                                     cost_method)
+                tax_events.append(_calculateTaxEvent(cost_reduced, 0))
+
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis,
+                }
+
             case 'gift':
                 new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], -txn['ETH']['amount'],
                                                                      cost_method)
@@ -161,6 +175,7 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
 
             case 'buy_nft':
                 pass
+
             case 'transfer_to_ronin':
                 pass
 

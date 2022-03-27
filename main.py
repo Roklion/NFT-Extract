@@ -1,4 +1,5 @@
 import ethTransactionsRetriever as ethTxnsRetriever
+import etherscanIO
 import coinbaseRetriever
 import fileIO
 import transactionHelper as txnHelper
@@ -16,7 +17,7 @@ with open(os.path.curdir + "/config/config.json") as json_data_file:
 
 data_path = os.path.curdir + config['dataFilePath']
 data_cache_f = data_path + TRANSACTION_DATA_CACHE_F
-ethTxnsRetriever.initialize(config['etherscanApiKey'])
+etherscanIO.initialize(config['etherscanApiKey'])
 
 my_wallets = [x.lower() for x in config['ethWallets']]
 

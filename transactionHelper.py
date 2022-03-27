@@ -1,7 +1,8 @@
+from etherscanIO import *
+from contractHelper import *
 from constants import *
 import priceIO
 from web3 import Web3
-from datetime import *
 
 
 def groupByNormalTxns(txn: dict,
@@ -120,61 +121,191 @@ def _timestampLessThan(txn_a, txn_b):
     return txn_a['timestamp'] < txn_b['timestamp']
 
 
+def _describeNFTs(erc20s, erc721s, erc1155s):
+    nft_str_list = []
+    for erc20 in erc20s:
+        nft_str_list.append("{:.5f} {}".format(erc20['value'], erc20['symbol']))
+
+    for erc721 in erc721s:
+        nft_str_list.append("{}-{}".format(erc721['symbol'], erc721['id']))
+
+    for erc1155 in erc1155s:
+        nft_str_list.append("{:.1f}x {}-{}".format(erc1155['value'], erc1155['symbol'], erc1155['id']))
+
+    return ", ".join(nft_str_list)
+
+
 def _describeEtherscanTxn(txn, my_wallets):
     eth_data = txn['ETH']
     gas_data = txn['gas']
     addr_from = eth_data['from'].lower()
     addr_to = eth_data['to'].lower()
+
+    # internal transfer between wallets
     if addr_from in my_wallets and addr_to in my_wallets:
         txn_type = 'transfer'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to 0x...{} ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:], addr_to[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
+    # transfer from Coinbase
     elif addr_from in COINBASE_WALLETS and addr_to in my_wallets:
         txn_type = 'transfer_from_coinbase'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from Coinbase to 0x...{} ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_to[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
+    # transfer back to Coinbase
     elif addr_to in COINBASE_WALLETS:
         txn_type = 'transfer_to_coinbase'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Coinbase ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
+    # Transfer via Ronin bridge
     elif addr_to in RONIN_BRIDGE:
         txn_type = 'transfer_to_ronin'
         describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Ronin ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
-    elif addr_from in my_wallets:
-        txn_type = 'buy_nft'
-        describe_str = 'Buy NFT for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
+    # Transfer via Ronin bridge
+    elif addr_to in POLYGON_BRIDGE:
+        txn_type = 'transfer_to_polygon'
+        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to Polygon ' \
                        'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
                                                                  addr_from[-5:],
                                                                  gas_data['amount'], gas_data['value_usd'])
+
+    # NFTs involved
+    elif len(txn['ERC-20'] + txn['ERC-721'] + txn['ERC-1155']):
+        nft_str = _describeNFTs(txn['ERC-20'], txn['ERC-721'], txn['ERC-1155'])
+
+        # ETH from wallet, pay to buy NFT
+        if addr_from in my_wallets:
+            txn_type = 'buy_nft'
+            describe_str = 'Buy {} for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
+                           'with {:.5f}E gas (worth ${:.2f})'.format(nft_str, eth_data['amount'], eth_data['value_usd'],
+                                                                     addr_from[-5:],
+                                                                     gas_data['amount'], gas_data['value_usd'])
+        # ETH to wallet, receive from NFT sale
+        elif addr_to in my_wallets:
+            txn_type = 'sell_nft'
+            describe_str = 'Sell {} for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
+                           'with {:.5f}E gas (worth ${:.2f})'.format(nft_str, eth_data['amount'], eth_data['value_usd'],
+                                                                     addr_to[-5:],
+                                                                     gas_data['amount'], gas_data['value_usd'])
+        # my wallets not involved, not expected transaction
+        else:
+            txn_type = 'unknown'
+            describe_str = 'Transfer {}, {:.5f}E (worth ${:.2f}) from 0x...{} to 0x...{} ' \
+                           'with {:.5f}E gas (worth ${:.2f})'.format(nft_str,
+                                                                     eth_data['amount'], eth_data['value_usd'],
+                                                                     addr_from[-5:], addr_to[-5:],
+                                                                     gas_data['amount'], gas_data['value_usd'])
+
+            raise Exception('Unknown transaction type {}\n{}'.format(txn_type, describe_str))
+
+    # ETH from my address, and no NFTs involved
+    elif addr_from in my_wallets:
+        contract = getContract(addr_to)
+
+        if isContract(contract):
+            func_name = findFunction(contract, txn['txn_normal']['input'])
+            #print(func_name)
+            if txn['txn_normal']['isError'] == '1':
+                txn_type = 'failed_txn'
+                describe_str = 'Function {} failed with {:.5f}E gas (worth ${:.2f})'.format(func_name,
+                                                                                            gas_data['amount'],
+                                                                                            gas_data['value_usd'])
+
+            elif addr_to in WETH_CONTRACT and func_name != 'approve':
+                match func_name:
+                    case 'deposit':
+                        txn_type = 'wrap_ETH'
+                        describe_str = 'Wrap {:.5f}E (worth ${:.2f}) to WETH ' \
+                                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'],
+                                                                                 eth_data['value_usd'],
+                                                                                 gas_data['amount'],
+                                                                                 gas_data['value_usd'])
+                    case 'withdraw':
+                        txn_type = 'unwrap_ETH'
+                        describe_str = 'Unwrap {:.5f}E (worth ${:.2f}) WETH ' \
+                                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'],
+                                                                                 eth_data['value_usd'],
+                                                                                 gas_data['amount'],
+                                                                                 gas_data['value_usd'])
+
+                    case _:
+                        raise Exception('Unknown interaction (function {}) with WETH contract'.format(func_name))
+
+            else:
+                match func_name:
+                    # TODO: handle these better, associate them with contracts
+                    case 'registerProxy' | 'cancelOrder_' | 'joinWhitelist' | 'bid':
+                        txn_type = 'misc_expense'   # Approve wallet
+                        describe_str = 'Function {} cost {:.5f}E (worth ${:.2f}) ' \
+                                       'with {:.5f}E gas (worth ${:.2f})'.format(func_name,
+                                                                                 eth_data['amount'],
+                                                                                 eth_data['value_usd'],
+                                                                                 gas_data['amount'],
+                                                                                 gas_data['value_usd'])
+
+                    case 'setApprovalForAll' | 'approve':
+                        txn_type = 'approve_contract'   # Approve contract
+                        describe_str = 'Approving {} contract ' \
+                                       'with {:.5f}E gas (worth ${:.2f})'.format(contract['ContractName'],
+                                                                                 gas_data['amount'],
+                                                                                 gas_data['value_usd'])
+
+                    case 'takingTickets':
+                        txn_type = 'raffle'     # Buy raffle tickets
+                        describe_str = 'Pay {:.5f}E to enter raffle ' \
+                                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'],
+                                                                                 gas_data['amount'],
+                                                                                 gas_data['value_usd'])
+                    case 'calculateMyResult':
+                        txn_type = 'raffle_result'  # get raffle result back
+                        eth_returned = 0
+                        for t_i in txn['txn_internal']:
+                            eth_returned += float(Web3.fromWei(int(t_i['value']), 'ether'))
+                        describe_str = 'Check raffle result ({:.5f}E returned) ' \
+                                       'with {:.5f}E gas (worth ${:.2f}'.format(eth_returned,
+                                                                                gas_data['amount'],
+                                                                                gas_data['value_usd'])
+
+                    case _:
+                        raise Exception('Unknown interaction (function {}) '
+                                        'with {} contract {}'.format(func_name, contract['name'], addr_to[-5:]))
+
+        else:
+            txn_type = 'gift'
+            describe_str = 'Gift {:.5f}E (worth ${:.2f}) to 0x...{} ' \
+                           'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
+                                                                     addr_to[-5:],
+                                                                     gas_data['amount'], gas_data['value_usd'])
+
+    # ETH to my wallet, and no NFTs involved
     elif addr_to in my_wallets:
-        txn_type = 'sell_nft'
-        describe_str = 'Sell NFT for {:.5f}E (worth ${:.2f}) for 0x...{} ' \
-                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
-                                                                 addr_to[-5:],
-                                                                 gas_data['amount'], gas_data['value_usd'])
+        txn_type = 'receive_gift'
+        describe_str = 'Receive {:.5f}E (worth ${:.2f}) ' \
+                       'from 0x...{}'.format(eth_data['amount'], eth_data['value_usd'],
+                                             addr_from[-5:],
+                                             gas_data['amount'], gas_data['value_usd'])
 
     else:
-        txn_type = 'unknown'
-        describe_str = 'Transfer {:.5f}E (worth ${:.2f}) from 0x...{} to 0x...{} ' \
-                       'with {:.5f}E gas (worth ${:.2f})'.format(eth_data['amount'], eth_data['value_usd'],
-                                                                 addr_from[-5:], addr_to[-5:],
-                                                                 gas_data['amount'], gas_data['value_usd'])
+        raise Exception('Unknown transaction {}'.format(txn['txn_normal']['txn_hash']))
 
-        raise Exception('Unknown transaction type {}\n{}'.format(txn_type, describe_str))
-
+    print(describe_str)
     return {
         'type': txn_type,
         'ETH': eth_data,
         'gas': gas_data,
+        'NFTs': {
+            'ERC-20': txn['ERC-20'],
+            'ERC-721': txn['ERC-721'],
+            'ERC-1155': txn['ERC-1155'],
+        },
         'description': describe_str,
         'timestamp': txn['timestamp'],
         'id': txn['txn_hash']
