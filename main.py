@@ -51,17 +51,25 @@ if config['forceNewData'] or not os.path.exists(data_path + TRANSACTION_DATA_CAC
         txns_erc721 = ethTxnsRetriever.getErc721Txns(wallet_addr)
         txns_erc1155 = ethTxnsRetriever.getErc1155Txns(wallet_addr, data_path)
 
+        txns_all = txns_normal + txns_internal + txns_erc20 + txns_erc721 + txns_erc1155
+
         txn_count = 0
         # Group everything around normal transactions
-        for txn in txns_normal:
+        for txn in txns_all:
+            result = any(item['txn_hash'] == txn['hash'] for item in txn_groups)
+            if result:
+                continue
+
             # UTC timestamp
             time_stamp = float(txn['timeStamp'])
             date = datetime.utcfromtimestamp(time_stamp)
             if time_stamp < start_timestamp or time_stamp > end_timestamp:
                 continue
 
-            # Join transactions into groups around normal transactions
-            txn_grouped = txnHelper.groupByNormalTxns(txn, txns_internal, txns_erc20, txns_erc721, txns_erc1155)
+            # Join transactions into groups around the same transaction hash
+            txn_grouped = txnHelper.groupByNormalTxns(txn['hash'], txn['timeStamp'],
+                                                      txns_normal, txns_internal,
+                                                      txns_erc20, txns_erc721, txns_erc1155)
 
             # Extract and enrich transaction group with key information, e.g. gas, ETH amounts, tokens
             txn_grouped_enriched = txnHelper.enrichTxn(txn_grouped)
@@ -70,6 +78,7 @@ if config['forceNewData'] or not os.path.exists(data_path + TRANSACTION_DATA_CAC
             txn_count += 1
 
         print(str(txn_count), " transactions processed")
+
     # cache new data to file
     fileIO.cacheTransactions(txn_groups, data_cache_f)
 

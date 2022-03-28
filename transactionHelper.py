@@ -5,21 +5,62 @@ import priceIO
 from web3 import Web3
 
 
-def groupByNormalTxns(txn: dict,
+def groupByNormalTxns(txn_hash: str,
+                      timeStamp: str,
+                      txns_normal: dict,
                       txns_internal: list,
                       txns_erc20: list,
                       txns_erc721: list,
                       txns_erc1155: list) -> dict:
     # Different type of transactions can be joined by the same transaction hash
-    txn_hash = txn['hash']
     return ({
         'txn_hash': txn_hash,
-        'txn_normal': txn,
+        'timeStamp': timeStamp,
+        'txn_normal': [t for t in txns_normal if t['hash'] == txn_hash],
         'txn_internal': [t for t in txns_internal if t['hash'] == txn_hash],
         'txn_erc20': [t for t in txns_erc20 if t['hash'] == txn_hash],
         'txn_erc721': [t for t in txns_erc721 if t['hash'] == txn_hash],
-        'txn_erc1155': [t for t in txns_erc1155 if t['Txhash'] == txn_hash]
+        'txn_erc1155': [t for t in txns_erc1155 if t['hash'] == txn_hash]
     })
+
+
+def _procesEthAndGasTxns(txns: list, timestamp: int) -> dict:
+    # Process gas and ETH
+    if len(txns) > 1:
+        raise Exception("Two normal transactions for the same hash")
+    elif not txns:
+        return {
+            'gas': {
+                'amount': 0,
+                'value_usd': 0,
+            },
+            'ETH': {
+                'amount': 0,
+                'value_usd': 0
+            }
+        }
+    else:   # len = 1
+        txn = txns[0]
+        if 'gasPrice' not in txn:
+            gas_amount = 0
+        else:
+            gas_amount = float(Web3.fromWei(int(txn['gasPrice']) * int(txn['gasUsed']), 'ether'))
+        eth_amount = float(Web3.fromWei(int(txn['value']), 'ether'))
+
+        # Add gas and ETH details of the given transaction
+        # amount is in ether
+        return {
+            'gas': {
+                'amount': gas_amount,
+                'value_usd': gas_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp)
+            },
+            'ETH': {
+                'amount': eth_amount,
+                'value_usd': eth_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp),
+                'from': txn['from'],
+                'to': txn['to']
+            },
+        }
 
 
 def _processErc20Txns(txns_erc20: list) -> dict:
@@ -61,13 +102,13 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
     for txn in txns_erc1155:
         # TokenName represents count of 1155 token
         erc1155_summary.append({
-            'value': float(txn['TokenName']),
-            'contract': txn['ContractAddress'],
-            'name': txn['TokenSymbol'],
-            'symbol': txn['TokenSymbol'],
-            'id': txn['TokenId'],
-            'from': txn['From'],
-            'to': txn['To']
+            'value': float(txn['tokenName']),
+            'contract': txn['contractAddress'],
+            'name': txn['tokenSymbol'],
+            'symbol': txn['tokenSymbol'],
+            'id': txn['tokenId'],
+            'from': txn['from'],
+            'to': txn['to']
         })
 
     return {'ERC-1155': erc1155_summary}
@@ -75,43 +116,26 @@ def _processErc1155Txns(txns_erc1155: list) -> dict:
 
 def enrichTxn(txn_grouped: dict) -> dict:
     txn_grouped_enriched = txn_grouped
-    txn_normal = txn_grouped['txn_normal']
-    timestamp = int(txn_normal['timeStamp'])
+    txn_grouped['timestamp'] = int(txn_grouped['timeStamp'])
 
-    # Process gas and ETH
-    gas_amount = float(Web3.fromWei(int(txn_normal['gasPrice']) * int(txn_normal['gasUsed']), 'ether'))
-    eth_amount = float(Web3.fromWei(int(txn_normal['value']), 'ether'))
+    # Process gas and ETH from normal txn
+    normal_txn_summary = _procesEthAndGasTxns(txn_grouped['txn_normal'], txn_grouped['timestamp'])
+    txn_grouped_enriched.update({'Normal': normal_txn_summary})
 
-    # Add gas and ETH details of the given transaction
-    # amount is in ether
-    txn_summary = {
-        'gas': {
-            'amount': gas_amount,
-            'value_usd': gas_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp)
-        },
-        'ETH': {
-            'amount': eth_amount,
-            'value_usd': eth_amount * priceIO.getTokenHistData("ethereum", "USD", timestamp),
-            'from': txn_normal['from'],
-            'to': txn_normal['to']
-        },
-        'timestamp': timestamp,
-    }
-    txn_grouped_enriched.update(txn_summary)
+    # Process internal transactions
+    internal_txn_summary = _procesEthAndGasTxns(txn_grouped['txn_internal'], txn_grouped['timestamp'])
+    txn_grouped_enriched.update({'Internal': internal_txn_summary})
 
     # Process ERC-20 tokens in transaction
     erc20_summary = _processErc20Txns(txn_grouped['txn_erc20'])
-    assert not dict(txn_grouped_enriched.items() & erc20_summary.items())  # make sure no overlap
     txn_grouped_enriched.update(erc20_summary)
 
     # Process ERC-721 tokens in transaction
     erc721_summary = _processErc721Txns(txn_grouped['txn_erc721'])
-    assert not dict(txn_grouped_enriched.items() & erc721_summary.items())  # make sure no overlap
     txn_grouped_enriched.update(erc721_summary)
 
     # Process ERC-1155 tokens in transaction
     erc1155_summary = _processErc1155Txns(txn_grouped['txn_erc1155'])
-    assert not dict(txn_grouped_enriched.items() & erc1155_summary.items())  # make sure no overlap
     txn_grouped_enriched.update(erc1155_summary)
 
     return txn_grouped_enriched

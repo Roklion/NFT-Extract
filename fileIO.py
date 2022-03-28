@@ -9,9 +9,23 @@ def getErc1155TxnsFromSpreadsheet(wallet, data_path):
     for file in os.listdir(path):
         if file.endswith(".csv") and wallet.lower() in file.lower():
             with open(path + file, "r") as f:
-                return list(csv.DictReader(f))
-                # return([{k: v for k, v in row.items()}
-                #     for row in csv.DictReader(f)])
+                txns = list(csv.DictReader(f))
+
+            txns_standard = []
+            for t in txns:
+                txns_standard.append({
+                    'hash': t['Txhash'],
+                    'timeStamp': t['UnixTimestamp'],
+                    'from': t['From'],
+                    'to': t['To'],
+                    'contractAddress': t['ContractAddress'],
+                    'tokenId': t['TokenId'],
+                    'tokenName': t['TokenName'],
+                    'tokenSymbol': t['TokenSymbol'],
+                    'note': t['PrivateNote']
+                })
+
+            return txns_standard
 
     print("Cannot find ERC-1155 data file for ", wallet)
     return []
