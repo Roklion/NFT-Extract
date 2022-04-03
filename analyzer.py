@@ -159,7 +159,7 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                     'cost_basis': new_cost_basis,
                 }
 
-            case 'gift':
+            case 'gift' | 'transfer_to_ronin':
                 new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], -txn['ETH']['amount'],
                                                                      cost_method)
                 # gift is NOT a tax event
@@ -174,12 +174,11 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                 }
 
             case 'buy_nft':
-                pass
-
-            case 'transfer_to_ronin':
+                print()
                 pass
 
             case _:
+                print()
                 pass
 
         if state:

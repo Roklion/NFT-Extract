@@ -34,7 +34,7 @@ print("\nTime period for analysis {} to {}".format(start_date, end_date))
 
 # Retrieve transaction data
 ## Coinbase transactions
-print("\nProcessing Coinbase transactions")
+print("Processing Coinbase transactions")
 coinbase_txns = coinbaseRetriever.getCoinbaseTxns(data_path)
 
 ## Etherscan transactions
@@ -42,7 +42,7 @@ coinbase_txns = coinbaseRetriever.getCoinbaseTxns(data_path)
 if config['forceNewData'] or not os.path.exists(data_path + TRANSACTION_DATA_CACHE_F):
     txn_groups = []
     for wallet_addr in my_wallets:
-        print("\nProcessing Etherscan transactions for wallet ", wallet_addr)
+        print("Processing Etherscan transactions for wallet ", wallet_addr)
 
         # Retrieve each type of transactions
         txns_normal = ethTxnsRetriever.getTxns(wallet_addr)
@@ -89,14 +89,14 @@ else:
 # Create analytics
 try:
     # Normalize coinbase and etherscan transactions
-    print("\nSummarize ETH transactions")
+    print("Summarize ETH transactions")
     eth_txns_summary = txnHelper.describeEthTxns(coinbase_txns, txn_groups, my_wallets)
 
     # Create analytic and timeline around ETH transactions
-    print("\nAnalyze ETH")
+    print("Analyze ETH")
     eth_balances = analyzer.analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO)
 except Exception as e:
     print("Caught an exception ", e)
 
-print("\nTransaction count")
+print("Transaction count")
 
