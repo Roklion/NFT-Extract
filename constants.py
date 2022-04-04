@@ -32,12 +32,18 @@ IGNORE_ADDRESS = [x.lower() for x in IGNORE_ADDRESS]
 # Cost Method
 COST_METHOD_HIFO = 'HIFO'
 
+
+# Sorting function
+def SORT_FUNC_BY_PRICE(x):
+    return x['unit_price_usd']
+
+
 # For API rate limit
 ONE_MINUTE = 60
 ONE_SECOND = 1
-MAX_CALLS_PER_MINUTE_CG = 40  # API limit is 50 calls/min
-MAX_CALLS_PER_SECOND_CG = 7  # API limit is 8 calls/min
-MAX_CALLS_PER_SECOND_ETHERSCAN = 5  # API limit is 8 calls/min
+MAX_CALLS_PER_MINUTE_CG = 25  # API limit is 50 calls/min
+MAX_CALLS_PER_SECOND_CG = 4  # API limit is 8 calls/min
+MAX_CALLS_PER_SECOND_ETHERSCAN = 4  # API limit is 5 calls/sec
 
 
 # Files

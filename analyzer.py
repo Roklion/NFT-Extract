@@ -1,23 +1,20 @@
+import priceIO
 from constants import *
 
 
 def _reduceCostBasisByEth(cost_basis, eth, cost_method):
-    def sortByPrice(x):
-        return x['unit_price_usd']
-
-    # 0 ETH transaction
-    # TODO: handle 0 transfer but with fees (use to cancel transactions)
     if eth > 0:
         raise Exception('cannot have transfer that costs less than nothing')
 
+    # eth < 0
     # Decrease in ETH = reduce cost
-    else:   # eth < 0
+    else:
         # Sort by price
         # TODO: support more cost basis types, FIFO, LIFO, average cost
         match cost_method:
             case _:     # COST_METHOD_HIFO
                 # sort transactions by descending cost
-                cost_basis.sort(reverse=True, key=sortByPrice)
+                cost_basis.sort(reverse=True, key=SORT_FUNC_BY_PRICE)
 
         cost_reduced = []
         eth_cost = -eth
@@ -52,6 +49,28 @@ def _reduceCostBasisByEth(cost_basis, eth, cost_method):
     return cost_basis, cost_reduced
 
 
+def _increaseCostBasisToEth(cost_basis, cost, cost_method):
+    if cost < 0:
+        raise Exception('cannot increase cost basis by negative amount')
+
+    # eth < 0
+    else:
+        # Sort by price
+        # TODO: support more cost basis types, FIFO, LIFO, average cost
+        match cost_method:
+            # COST_METHOD_HIFO
+            case _:
+                # sort transactions by descending cost
+                cost_basis.sort(reverse=True, key=SORT_FUNC_BY_PRICE)
+
+        # remove cost items with 0 amount left
+        cost_basis = list(filter(lambda c: c['amount'] > 0, cost_basis))
+        # increase average cost of ETH
+        cost_basis[0]['unit_price_usd'] += cost / cost_basis[0]['amount']
+
+    return cost_basis
+
+
 def _calculateTaxEvent(cost_basis, price_sold):
     tax_base = proceeds = 0
     for cost_i in cost_basis:
@@ -74,11 +93,17 @@ def _matchCoinbaseTransferPair(txn_by_coinbase, txn_from_coinbase, prev_state, c
 
     # implied transaction cost = difference in sent amount vs received amount
     transfer_cost_eth = txn_from_coinbase['ETH']['amount'] - txn_by_coinbase['ETH']['amount']
-    new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], transfer_cost_eth, cost_method)
+    cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], transfer_cost_eth, cost_method)
+
+    # order of operation:
+    #   1. Sold ETH at spot price (Tax Event)
+    #   2. Use proceeds from 1 to pay expense
+    #   3. Value of 2 is added to ETH cost basis because it is necessary expense to continue investing with ETH
+    timestamp = max(txn_by_coinbase['timestamp'], txn_from_coinbase['timestamp'])
+    tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(timestamp))
+    new_cost_basis = _increaseCostBasisToEth(cost_basis, tax_event['proceeds'], cost_method)
 
     remaining_balance = sum([x['amount'] for x in new_cost_basis])
-    tax_event = _calculateTaxEvent(cost_reduced, 0)
-
     state = {
         'timestamp': min(txn_by_coinbase['timestamp'], txn_from_coinbase['timestamp']),
         'remaining_balance': remaining_balance,
@@ -104,15 +129,17 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
 
     for txn in eth_txns_summary:
         state = {}
+        cost_basis = prev_state['cost_basis']
 
         match txn['type']:
             # Purchase ETH (With USD)
             case 'buy':
-                cost_basis = prev_state['cost_basis']
                 # Add new purchased amount with cost basis (including gas/fees)
                 cost_basis.append({
                     'amount': txn['ETH']['amount'],
-                    'unit_price_usd': (txn['ETH']['value_usd'] + txn['gas']['value_usd']) / txn['ETH']['amount']})
+                    'unit_price_usd': priceIO.getEthPrice(txn['timestamp'])
+                })
+                # NOT tax event
                 remaining_balance = sum([x['amount'] for x in cost_basis])
                 state = {
                     'timestamp': txn['timestamp'],
@@ -131,7 +158,6 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                 else:
                     txn_pair = temp_coinbase_transfers.pop(0)
                     state, tax_event = _matchCoinbaseTransferPair(txn, txn_pair, prev_state, cost_method)
-
                     tax_events.append(tax_event)
 
             case 'transfer_from_coinbase':
@@ -142,14 +168,18 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                 else:
                     txn_pair = temp_coinbase_transfers.pop(0)
                     state, tax_event = _matchCoinbaseTransferPair(txn_pair, txn, prev_state, cost_method)
-
                     tax_events.append(tax_event)
 
-            case 'transfer':
-                new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], -txn['gas']['amount'],
+            # TODO handle ronin/polygon tokens
+            case 'transfer' | 'transfer_to_ronin' | 'transfer_to_polygon':
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -txn['gas']['amount'],
                                                                      cost_method)
-                tax_events.append(_calculateTaxEvent(cost_reduced, 0))
+                # the reduced cost is used to pay expense, thus increasing USD cost of remaining ETH
+                tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                tax_events.append(tax_event)
+                new_cost_basis = _increaseCostBasisToEth(new_cost_basis, tax_event['proceeds'], cost_method)
 
+                # NOT tax event
                 remaining_balance = sum([x['amount'] for x in new_cost_basis])
                 state = {
                     'timestamp': txn['timestamp'],
@@ -159,10 +189,18 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                     'cost_basis': new_cost_basis,
                 }
 
-            case 'gift' | 'transfer_to_ronin':
-                new_cost_basis, cost_reduced = _reduceCostBasisByEth(prev_state['cost_basis'], -txn['ETH']['amount'],
-                                                                     cost_method)
-                # gift is NOT a tax event
+            case 'gift':
+                eth_reduction = txn['ETH']['amount']
+                new_cost_basis, _ = _reduceCostBasisByEth(cost_basis, -eth_reduction, cost_method)
+                # gift is NOT tax event, but cost is
+                gas_cost = txn['gas']['amount'] if 'amount' in txn['gas'] else 0
+                if gas_cost:
+                    new_cost_basis, cost_reduced = _reduceCostBasisByEth(new_cost_basis, -gas_cost, cost_method)
+                    tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                    tax_events.append(tax_event)
+                    new_cost_basis = _increaseCostBasisToEth(new_cost_basis, tax_event['proceeds'], cost_method)
+                else:
+                    new_cost_basis = cost_basis
 
                 remaining_balance = sum([x['amount'] for x in new_cost_basis])
                 state = {
@@ -170,20 +208,141 @@ def analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO):
                     'remaining_balance': remaining_balance,
                     'unit_price_usd_avg':
                         sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
-                    'cost_basis': new_cost_basis,
+                    'cost_basis': new_cost_basis
                 }
 
-            case 'buy_nft':
-                print()
+            # could be receiving gift or raffle returns, does not make a difference
+            case 'receive_gift':
+                cost_basis.append({
+                    'amount': txn['ETH']['amount'],
+                    'unit_price_usd': priceIO.getEthPrice(txn['timestamp'])
+                })
+
+                # cost is tax event
+                gas_cost = txn['gas']['amount'] if 'amount' in txn['gas'] else 0
+                if gas_cost:
+                    cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -gas_cost, cost_method)
+                    tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                    tax_events.append(tax_event)
+                    new_cost_basis = _increaseCostBasisToEth(cost_basis, tax_event['proceeds'], cost_method)
+                else:
+                    new_cost_basis = cost_basis
+
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis
+                }
+
+            case 'misc_expense':
+                eth_reduction = txn['ETH']['amount'] + (txn['gas']['amount'] if 'amount' in txn['gas'] else 0)
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -eth_reduction, cost_method)
+                # the reduced cost is used to pay expense, thus increasing USD cost of remaining ETH
+                tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                tax_events.append(tax_event)
+                new_cost_basis = _increaseCostBasisToEth(new_cost_basis, tax_event['proceeds'], cost_method)
+
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis
+                }
+
+            case 'failed_txn':
+                eth_reduction = txn['gas']['amount']
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -eth_reduction, cost_method)
+                # the reduced cost is used to pay expense, thus increasing USD cost of remaining ETH
+                tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                tax_events.append(tax_event)
+                new_cost_basis = _increaseCostBasisToEth(new_cost_basis, tax_event['proceeds'], cost_method)
+
+                # TODO add cost to contract instead
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis
+                }
+
+            case 'transfer_nft' | 'send_nft':
+                eth_reduction = txn['gas']['amount'] if 'amount' in txn['gas'] else 0
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -eth_reduction, cost_method)
+
+                tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                tax_events.append(tax_event)
+
+                # TODO transfer cost to NFTs
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis
+                }
+
+            case 'buy_nft' | 'approve_contract' | 'exchange' | 'wrap_ETH':
+                eth_reduction = (txn['ETH']['amount'] if 'amount' in txn['ETH'] else 0) + \
+                                (txn['gas']['amount'] if 'amount' in txn['gas'] else 0)
+                new_cost_basis, cost_reduced = _reduceCostBasisByEth(cost_basis, -eth_reduction, cost_method)
+
+                tax_event = _calculateTaxEvent(cost_reduced, priceIO.getEthPrice(txn['timestamp']))
+                tax_events.append(tax_event)
+
+                # TODO handle outbound NFT costs (exchange)
+                # TODO transfer cost to NFTs
+                remaining_balance = sum([x['amount'] for x in new_cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in new_cost_basis]) / remaining_balance,
+                    'cost_basis': new_cost_basis
+                }
+
+            case 'sell_nft' | 'unwrap_ETH':
+                # Add new purchased amount with cost basis (including gas/fees)
+                cost_basis.append({
+                    'amount': txn['ETH']['amount'],
+                    'unit_price_usd': priceIO.getEthPrice(txn['timestamp'])
+                })
+
+                # TODO handle NFT sale tax event
+                remaining_balance = sum([x['amount'] for x in cost_basis])
+                state = {
+                    'timestamp': txn['timestamp'],
+                    'remaining_balance': remaining_balance,
+                    'unit_price_usd_avg':
+                        sum([x['unit_price_usd'] * x['amount'] for x in cost_basis]) / remaining_balance,
+                    'cost_basis': cost_basis,
+                }
+
+            case 'burn_nft':
+                # TODO implement this
+                pass
+
+            case 'receive_nft_gift':
+                # TODO implement this
+                pass
+
+            case 'ignore':
                 pass
 
             case _:
-                print()
-                pass
+                raise Exception('Unknown transaction type {} cannot be processed'.format(txn['type']))
 
         if state:
+            print(txn['description'])
+            print(state['remaining_balance'])
             balances.append(state)
             prev_state = state
 
-    print()
     return balances

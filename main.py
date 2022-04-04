@@ -96,7 +96,6 @@ try:
     print("Analyze ETH")
     eth_balances = analyzer.analyzeEth(eth_txns_summary, cost_method=COST_METHOD_HIFO)
 except Exception as e:
-    print("Caught an exception ", e)
+    print("Caught an exception {}".format(e.__traceback__))
 
 print("Transaction count")
-
